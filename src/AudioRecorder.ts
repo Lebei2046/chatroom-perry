@@ -55,7 +55,7 @@ export class AudioRecorder {
         this.waveformText = Text("..................");
         widgetAddChild(this.indicatorBubble, this.waveformText);
 
-        this.cancelButton = Button("取消", () => {
+        this.cancelButton = Button("Cancel", () => {
             this.cancel();
         });
         widgetSetWidth(this.cancelButton, 100);
@@ -64,7 +64,7 @@ export class AudioRecorder {
         widgetSetBackgroundColor(this.cancelButton, 0.9, 0.9, 0.95, 1.0);
         widgetSetHidden(this.cancelButton, 1);
 
-        this.convertButton = Button("滑到这里 转文字", () => {
+        this.convertButton = Button("Slide here to convert", () => {
             this.convert();
         });
         widgetSetWidth(this.convertButton, 140);
@@ -73,7 +73,7 @@ export class AudioRecorder {
         widgetSetBackgroundColor(this.convertButton, 0.9, 0.7, 0.7, 1.0);
         widgetSetHidden(this.convertButton, 1);
 
-        this.releaseHint = Text("松开 发送");
+        this.releaseHint = Text("Release to send");
 
         const buttonRow = HStack(8, [
             this.cancelButton,
