@@ -3,10 +3,10 @@ import {
     widgetAddChild, widgetSetBackgroundColor, widgetSetHeight, widgetSetWidth,
     setPadding, setCornerRadius, widgetSetHidden, textSetString, appSetTimer
 } from "perry/ui";
-import { audioStart, audioStop, audioGetLevel, audioGetPeak } from "perry/system";
+import { audioStart, audioStop, audioGetLevel, audioSetOutputFilename, audioStopRecording } from "perry/system";
 
 export interface AudioRecorderOptions {
-    onSend?: (duration: number) => void;
+    onSend?: (duration: number, filePath?: string) => void;
     onCancel?: () => void;
     onConvert?: () => void;
 }
@@ -15,7 +15,6 @@ export class AudioRecorder {
     private isRecording = false;
     private recordingStartTime = 0;
     private recordedDuration = 0;
-    private timerActive = false;
 
     private container: Widget;
     private indicatorBubble: Widget;
@@ -25,9 +24,12 @@ export class AudioRecorder {
     private convertButton: Widget;
     private releaseHint: Widget;
 
-    private onSendCallback?: (duration: number) => void;
+    private onSendCallback?: (duration: number, filePath?: string) => void;
     private onCancelCallback?: () => void;
     private onConvertCallback?: () => void;
+
+    private recordedLevels: number[] = [];
+    private currentFileName: string = "";
 
     constructor(options?: AudioRecorderOptions) {
         this.onSendCallback = options?.onSend;
@@ -89,59 +91,59 @@ export class AudioRecorder {
         return container;
     }
 
-    private computeWaveformText(level: number, peak: number): string {
-        let normalizedLevel = 0;
-        if (level >= 30) {
-            normalizedLevel = Math.min(1, (level - 30) / 80);
-        }
-        let value = Math.max(normalizedLevel, peak);
-        const count = Math.max(3, Math.floor(value * 15));
-        return "█".repeat(count) + " ".repeat(15 - count);
-    }
-
-    private updateTime(): void {
+    private updateDisplay(): void {
         if (!this.isRecording) return;
+
+        const level = audioGetLevel();
+        
+        // AudioGetLevel returns dB with +110 offset (0-140 dB range)
+        // Convert to 0-1 scale where 50 = silence threshold, 140 = max
+        let normalizedLevel = 0;
+        if (level >= 50 && level <= 140) {
+            normalizedLevel = (level - 50) / 90;
+        } else if (level > 140) {
+            normalizedLevel = 1;
+        } else if (level > 0) {
+            normalizedLevel = level / 50;
+        }
+        
+        const count = Math.max(3, Math.floor(normalizedLevel * 15));
+        const waveform = "█".repeat(count) + " ".repeat(15 - count);
+
+        textSetString(this.waveformText, waveform);
+
         this.recordedDuration = Math.floor((Date.now() - this.recordingStartTime) / 1000);
         const mins = Math.floor(this.recordedDuration / 60);
         const secs = this.recordedDuration % 60;
         textSetString(this.timeIndicator, `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-    }
 
-    private pollAudioLevel(): void {
-        if (!this.isRecording || !this.timerActive) return;
-
-        const level = audioGetLevel();
-        const peak = audioGetPeak();
-        const waveform = this.computeWaveformText(level, peak);
-
-        console.log(`[AudioRecorder] Poll - level: ${level}, peak: ${peak}, waveform: ${waveform}`);
-        
-        textSetString(this.waveformText, waveform);
-        this.updateTime();
+        this.recordedLevels.push(level);
     }
 
     start(): void {
         if (this.isRecording) return;
 
-        const success = audioStart();
-        console.log(`[AudioRecorder] audioStart result: ${success}`);
+        const fileName = `voice_${Date.now()}.wav`;
+        audioSetOutputFilename(fileName);
+        audioStart();
 
         this.isRecording = true;
-        this.timerActive = true;
         this.recordingStartTime = Date.now();
         this.recordedDuration = 0;
+        this.recordedLevels = [];
+        this.currentFileName = fileName;
 
         widgetSetHidden(this.container, 0);
         widgetSetHidden(this.cancelButton, 0);
         widgetSetHidden(this.convertButton, 0);
-        widgetSetBackgroundColor(this.indicatorBubble, 0.6, 1.0, 0.6, 1.0);
+        widgetSetBackgroundColor(this.indicatorBubble, 0.8, 0.2, 0.2, 1.0);
 
         textSetString(this.waveformText, "███████████████");
         textSetString(this.timeIndicator, "00:00");
 
-        // Start polling timer
-        appSetTimer(100, () => {
-            this.pollAudioLevel();
+        const self = this;
+        appSetTimer(100, function() {
+            self.updateDisplay();
         });
     }
 
@@ -149,7 +151,7 @@ export class AudioRecorder {
         if (!this.isRecording) return;
 
         this.isRecording = false;
-        this.timerActive = false;
+        audioStopRecording();
         audioStop();
 
         widgetSetHidden(this.container, 1);
@@ -159,20 +161,25 @@ export class AudioRecorder {
         this.recordedDuration = Math.max(1, Math.floor((Date.now() - this.recordingStartTime) / 1000));
 
         if (this.onSendCallback) {
-            this.onSendCallback(this.recordedDuration);
+            this.onSendCallback(this.recordedDuration, this.currentFileName);
         }
+        
+        this.currentFileName = "";
     }
 
     cancel(): void {
         if (!this.isRecording) return;
 
         this.isRecording = false;
-        this.timerActive = false;
+        audioStopRecording();
         audioStop();
 
         widgetSetHidden(this.container, 1);
         widgetSetHidden(this.cancelButton, 1);
         widgetSetHidden(this.convertButton, 1);
+
+        this.recordedLevels = [];
+        this.currentFileName = "";
 
         if (this.onCancelCallback) {
             this.onCancelCallback();
@@ -183,12 +190,15 @@ export class AudioRecorder {
         if (!this.isRecording) return;
 
         this.isRecording = false;
-        this.timerActive = false;
+        audioStopRecording();
         audioStop();
 
         widgetSetHidden(this.container, 1);
         widgetSetHidden(this.cancelButton, 1);
         widgetSetHidden(this.convertButton, 1);
+
+        this.recordedLevels = [];
+        this.currentFileName = "";
 
         if (this.onConvertCallback) {
             this.onConvertCallback();

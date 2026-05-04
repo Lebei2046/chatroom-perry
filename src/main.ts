@@ -2,8 +2,9 @@ import {
     App, VStack, HStack, Text, Button, ScrollView, TextField,
     VStackWithInsets, widgetAddChild, widgetMatchParentWidth, widgetMatchParentHeight,
     widgetSetBackgroundColor, widgetSetHeight, widgetSetWidth, setPadding, setCornerRadius,
-    widgetSetHidden
+    widgetSetHidden, widgetSetOnClick
 } from "perry/ui";
+import { createPlayer, play, stop, destroy } from "perry/media";
 import { AudioRecorder } from "./AudioRecorder";
 
 interface Message {
@@ -12,6 +13,8 @@ interface Message {
     type: "text" | "voice" | "emoji" | "plus";
     isSent: boolean;
     duration?: number;
+    filePath?: string;
+    playerHandle?: number;
 }
 
 const messages: Message[] = [
@@ -49,6 +52,20 @@ function createMessageBubble(message: Message): Widget {
             Text(`${message.duration}''`)
         ]);
         widgetAddChild(bubble, content);
+
+        if (message.filePath) {
+            widgetSetOnClick(bubble, () => {
+                if (message.playerHandle && message.playerHandle > 0) {
+                    play(message.playerHandle);
+                } else {
+                    const handle = createPlayer(message.filePath!);
+                    if (handle > 0) {
+                        message.playerHandle = handle;
+                        play(handle);
+                    }
+                }
+            });
+        }
     } else {
         const text = Text(message.text);
         widgetAddChild(bubble, text);
@@ -147,17 +164,21 @@ function main(): void {
     setCornerRadius(holdAndSpeakButton, 20);
 
     audioRecorder = new AudioRecorder({
-        onSend: (duration: number) => {
+        onSend: (duration: number, filePath?: string) => {
             const newMessage: Message = {
                 id: messageIdCounter++,
                 text: `Voice message ${duration}s`,
                 type: "voice",
                 isSent: true,
-                duration: duration
+                duration: duration,
+                filePath: filePath
             };
             messages.push(newMessage);
             widgetAddChild(messageContainer, createMessageBubble(newMessage));
-            showToast(`Voice message sent (${duration}s)`);
+            const toastMsg = filePath
+                ? `Voice message sent (${duration}s) - saved to ${filePath}`
+                : `Voice message sent (${duration}s)`;
+            showToast(toastMsg);
             switchToTextMode();
         },
         onCancel: () => {
