@@ -3,18 +3,19 @@ import {
     widgetAddChild, widgetSetBackgroundColor, widgetSetHeight, widgetSetWidth,
     setPadding, setCornerRadius, widgetSetHidden, textSetString, appSetTimer
 } from "perry/ui";
-import { audioStart, audioStop, audioGetLevel, audioSetOutputFilename, audioStopRecording } from "perry/system";
+import { audioStart, audioStop, audioGetLevel, audioSetOutputFilename, audioStartRecording, audioStopRecording } from "perry/system";
 
 export interface AudioRecorderOptions {
     onSend?: (duration: number, filePath?: string) => void;
     onCancel?: () => void;
-    onConvert?: () => void;
+    onConvert?: (filePath?: string) => void;
 }
 
 export class AudioRecorder {
     private isRecording = false;
     private recordingStartTime = 0;
     private recordedDuration = 0;
+    private isStopping = false;
 
     private container: Widget;
     private indicatorBubble: Widget;
@@ -92,7 +93,7 @@ export class AudioRecorder {
     }
 
     private updateDisplay(): void {
-        if (!this.isRecording) return;
+        if (!this.isRecording || this.isStopping) return;
 
         const level = audioGetLevel();
         
@@ -126,6 +127,7 @@ export class AudioRecorder {
         const fileName = `voice_${Date.now()}.wav`;
         audioSetOutputFilename(fileName);
         audioStart();
+        audioStartRecording();
 
         this.isRecording = true;
         this.recordingStartTime = Date.now();
@@ -150,6 +152,7 @@ export class AudioRecorder {
     stop(): void {
         if (!this.isRecording) return;
 
+        this.isStopping = true;
         this.isRecording = false;
         audioStopRecording();
         audioStop();
@@ -170,6 +173,7 @@ export class AudioRecorder {
     cancel(): void {
         if (!this.isRecording) return;
 
+        this.isStopping = true;
         this.isRecording = false;
         audioStopRecording();
         audioStop();
@@ -189,6 +193,7 @@ export class AudioRecorder {
     convert(): void {
         if (!this.isRecording) return;
 
+        this.isStopping = true;
         this.isRecording = false;
         audioStopRecording();
         audioStop();
@@ -198,10 +203,12 @@ export class AudioRecorder {
         widgetSetHidden(this.convertButton, 1);
 
         this.recordedLevels = [];
+
+        const filePath = this.currentFileName;
         this.currentFileName = "";
 
         if (this.onConvertCallback) {
-            this.onConvertCallback();
+            this.onConvertCallback(filePath);
         }
     }
 
@@ -211,5 +218,9 @@ export class AudioRecorder {
 
     getIsRecording(): boolean {
         return this.isRecording;
+    }
+
+    getCurrentFilePath(): string {
+        return this.currentFileName;
     }
 }

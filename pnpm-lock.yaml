@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      perry-vosk:
+        specifier: file:./extensions/perry-vosk
+        version: file:extensions/perry-vosk
+
+packages:
+
+  perry-vosk@file:extensions/perry-vosk:
+    resolution: {directory: extensions/perry-vosk, type: directory}
+
+snapshots:
+
+  perry-vosk@file:extensions/perry-vosk: {}

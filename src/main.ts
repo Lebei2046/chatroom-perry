@@ -1,11 +1,13 @@
 import {
-    App, VStack, HStack, Text, Button, ScrollView, TextField,
+    App, VStack, HStack, Text, Button, ScrollView, TextField, State,
     VStackWithInsets, widgetAddChild, widgetMatchParentWidth, widgetMatchParentHeight,
     widgetSetBackgroundColor, widgetSetHeight, widgetSetWidth, setPadding, setCornerRadius,
-    widgetSetHidden, widgetSetOnClick
+    widgetSetHidden, widgetSetOnClick, widgetSetOnTouch, stateBindTextfield, onTerminate
 } from "perry/ui";
 import { createPlayer, play, stop, destroy } from "perry/media";
 import { AudioRecorder } from "./AudioRecorder";
+import { SpeechRecognizer } from "./SpeechRecognizer";
+import { voskConvertFile } from "perry-vosk";
 
 interface Message {
     id: number;
@@ -33,6 +35,8 @@ let voiceInputRow: Widget;
 let holdAndSpeakButton: Widget;
 let textInputContainer: Widget;
 let audioRecorder: any;
+let textField: Widget;
+let speechRecognizer: SpeechRecognizer;
 
 function createMessageBubble(message: Message): Widget {
     const bubble = VStackWithInsets(8, 12, 16, 12, 16);
@@ -106,7 +110,25 @@ function switchToTextMode() {
     }
 }
 
-function main(): void {
+async function handleConvertToText(filePath?: string) {
+    if (filePath) {
+        showToast("Converting voice to text...");
+        voskConvertFile(filePath, (text: string) => {
+            currentTextInput = text;
+            const messageText = State(text);
+            stateBindTextfield(messageText, textField);
+            showToast("Voice converted to text");
+        });
+    } else {
+        currentTextInput = "Voice converted text";
+        const messageText = State("Voice converted text");
+        stateBindTextfield(messageText, textField);
+        showToast("Voice converted to text (no file)");
+    }
+    switchToTextMode();
+}
+
+async function main(): Promise<void> {
     messageContainer = renderMessages();
 
     const scrollView = ScrollView();
@@ -114,19 +136,30 @@ function main(): void {
     widgetMatchParentHeight(scrollView);
     widgetAddChild(scrollView, messageContainer);
 
-    const textField = TextField("Enter message...", (value) => {
+    const messageText = State("");
+    textField = TextField("", (value) => {
         currentTextInput = value;
+        messageText.set(value);
     });
     widgetSetWidth(textField, 140);
     widgetSetHeight(textField, 32);
+    stateBindTextfield(messageText, textField);
 
-    const voiceToTextButton = Button("🔊", () => {
-        showToast("Voice recognizer activated - speak now");
+    speechRecognizer = new SpeechRecognizer({
+        onTextRecognized: (text: string) => {
+            currentTextInput = text;
+            const messageText = State(text);
+            stateBindTextfield(messageText, textField);
+            showToast(`Recognized: ${text}`);
+        },
+        onStatusChange: (isActive: boolean) => {
+            if (isActive) {
+                showToast("Voice recognizer activated - speak now");
+            } else {
+                showToast("Voice input stopped");
+            }
+        }
     });
-    widgetSetWidth(voiceToTextButton, 32);
-    widgetSetHeight(voiceToTextButton, 32);
-    setCornerRadius(voiceToTextButton, 16);
-    widgetSetBackgroundColor(voiceToTextButton, 1.0, 1.0, 1.0, 1.0);
 
     const emojiButton = Button("😊", () => {
         showToast("Emoji picker opened");
@@ -144,19 +177,19 @@ function main(): void {
     setCornerRadius(plusButton, 20);
     widgetSetBackgroundColor(plusButton, 0.9, 0.9, 0.9, 1.0);
 
-    textInputContainer = HStack(4, [textField, voiceToTextButton]);
+    textInputContainer = HStack(4, [textField, speechRecognizer.getWidget()]);
     setCornerRadius(textInputContainer, 20);
     widgetSetBackgroundColor(textInputContainer, 0.9, 0.9, 0.9, 1.0);
     widgetSetWidth(textInputContainer, 180);
     widgetSetHeight(textInputContainer, 36);
 
     holdAndSpeakButton = Button("Hold and Speak", () => {
-        if (!audioRecorder.getIsRecording()) {
-            audioRecorder.start();
-            widgetSetBackgroundColor(holdAndSpeakButton, 0.8, 0.2, 0.2, 1.0);
-        } else {
+        if (audioRecorder.getIsRecording()) {
             audioRecorder.stop();
             widgetSetBackgroundColor(holdAndSpeakButton, 0.6, 0.6, 0.6, 1.0);
+        } else {
+            audioRecorder.start();
+            widgetSetBackgroundColor(holdAndSpeakButton, 0.8, 0.2, 0.2, 1.0);
         }
     });
     widgetSetWidth(holdAndSpeakButton, 180);
@@ -185,11 +218,7 @@ function main(): void {
             showToast("Recording cancelled");
             switchToTextMode();
         },
-        onConvert: () => {
-            currentTextInput = "Voice converted text";
-            showToast("Voice converted to text");
-            switchToTextMode();
-        }
+        onConvert: handleConvertToText
     });
 
     const voiceButton = Button("🎤", () => {
@@ -244,6 +273,15 @@ function main(): void {
     const mainLayout = VStack([scrollView, audioRecorder.getWidget(), inputContainer]);
     widgetMatchParentWidth(mainLayout);
     widgetMatchParentHeight(mainLayout);
+
+    onTerminate(() => {
+        if (audioRecorder && audioRecorder.getIsRecording()) {
+            audioRecorder.stop();
+        }
+        if (speechRecognizer && speechRecognizer.isSpeechActive()) {
+            speechRecognizer.stop();
+        }
+    });
 
     App({
         title: "Chatroom",

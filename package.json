@@ -1,0 +1,7 @@
+{
+  "name": "chatroom",
+  "version": "0.1.0",
+  "dependencies": {
+    "perry-vosk": "file:./extensions/perry-vosk"
+  }
+}
