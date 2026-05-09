@@ -1,6 +1,7 @@
 # Perry build outputs
 dist/
 *.o
+*.a
 
 # Generated type stubs (regenerate with `perry types`)
 .perry/types/
@@ -12,3 +13,9 @@ node_modules/
 .vscode/
 .idea/
 .marscode/
+
+target/
+
+*.wav
+chatroom
+model/
