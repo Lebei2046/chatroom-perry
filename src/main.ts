@@ -111,7 +111,7 @@ function switchToTextMode() {
 }
 
 async function handleConvertToText(filePath?: string) {
-    if (filePath) {
+    if (filePath && typeof filePath === "string" && filePath !== "NaN") {
         showToast("Converting voice to text...");
         voskConvertFile(filePath, (text: string) => {
             currentTextInput = text;

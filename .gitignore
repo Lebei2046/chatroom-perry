@@ -4,7 +4,7 @@ dist/
 *.a
 
 # Generated type stubs (regenerate with `perry types`)
-.perry/types/
+.perry/
 .perry-cache/
 
 # Node modules
@@ -19,6 +19,5 @@ target/
 
 *.wav
 !extensions/perry-vosk/crate-linux/tests/voice.wav
-test-*
 chatroom
 model/

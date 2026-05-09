@@ -66,8 +66,11 @@ fn to_pcm_i16(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
+const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
 extern "C" {
-    fn js_closure_call1(closure: i64, arg: i64);
+    fn js_closure_call1(closure: i64, arg: f64);
     fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
 }
 
@@ -77,39 +80,35 @@ fn send_to_js(closure: i64, text: &str) {
             Ok(s) => s,
             Err(_) => return,
         };
-        let js_str = js_string_from_bytes(c_str.as_ptr() as *const u8, text.len() as i32);
-        js_closure_call1(closure, js_str);
+        let str_ptr = js_string_from_bytes(c_str.as_ptr() as *const u8, text.len() as i32);
+        let js_val = f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        js_closure_call1(closure, js_val);
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn voskIsAvailable() -> f64 {
-    eprintln!("[VOSK DEBUG] js_voskIsAvailable() called");
     if VOSK_MODEL.is_some() {
-        eprintln!("[VOSK DEBUG] returning 1.0");
         1.0
     } else {
-        eprintln!("[VOSK DEBUG] returning 0.0");
         0.0
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskStart(callback: i64) -> i64 {
-    eprintln!("[VOSK DEBUG] voskStart() called");
-    eprintln!("[VOSK DEBUG] Callback handle: {}", callback);
+pub unsafe extern "C" fn voskStart(callback: f64) -> i64 {
+    let callback_bits = callback.to_bits();
+    let callback_ptr = (callback_bits & POINTER_MASK) as i64;
+    
     if VOSK_RUNNING.load(Ordering::Relaxed) {
-        eprintln!("[VOSK DEBUG] Already running");
         return SESSION_ID.load(Ordering::Relaxed) as i64;
     }
 
     let Some(model) = VOSK_MODEL.as_ref() else {
-        eprintln!("[VOSK DEBUG] No model available");
         return 0;
     };
 
     let Some(rec) = vosk::Recognizer::new(model, SAMPLE_RATE as f32) else {
-        eprintln!("[VOSK DEBUG] Failed to create recognizer");
         return 0;
     };
 
@@ -118,9 +117,7 @@ pub unsafe extern "C" fn voskStart(callback: i64) -> i64 {
     VOSK_RUNNING.store(true, Ordering::Relaxed);
 
     let rec_arc = Arc::new(Mutex::new(rec));
-    *RECOGNIZER.lock().unwrap() = Some((rec_arc, callback));
-
-    eprintln!("[VOSK DEBUG] Recognition started, session: {}", session_id);
+    *RECOGNIZER.lock().unwrap() = Some((rec_arc, callback_ptr));
 
     session_id as i64
 }
@@ -159,7 +156,6 @@ pub unsafe extern "C" fn voskProcessSamples(samples_ptr: *const f32, num_samples
 
 #[no_mangle]
 pub unsafe extern "C" fn voskStop(session_id: i64) {
-    eprintln!("[VOSK DEBUG] js_voskStop() called for session {}", session_id);
     if !VOSK_RUNNING.load(Ordering::Relaxed) {
         return;
     }
@@ -182,42 +178,31 @@ pub unsafe extern "C" fn voskStop(session_id: i64) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskConvertFile(file_path_value: f64, callback: i64) {
-    eprintln!("Vosk: voskConvertFile called with file_path_value: {} (0x{:x})", file_path_value, file_path_value.to_bits());
-    
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-    let bits = file_path_value.to_bits();
-    let ptr = (bits & POINTER_MASK) as usize;
+pub unsafe extern "C" fn voskConvertFile(file_path_ptr: i64, callback: f64) {
+    let ptr = file_path_ptr as usize;
     
     if ptr < 0x1000 {
-        eprintln!("Vosk: Invalid pointer");
         return;
     }
     
-    let file_path_ptr = ptr as *const StringHeader;
-    let len = (*file_path_ptr).byte_len as usize;
-    eprintln!("Vosk: String byte length: {}", len);
+    let file_path_header = ptr as *const StringHeader;
+    let len = (*file_path_header).byte_len as usize;
     
     if len == 0 || len > 1024 {
-        eprintln!("Vosk: Invalid string length: {}", len);
         return;
     }
     
-    let data_ptr = (file_path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data_ptr = (file_path_header as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     
     let file_path = String::from_utf8_lossy(bytes).into_owned();
-    eprintln!("Vosk: voskConvertFile called with path: {}", file_path);
-    eprintln!("Vosk: Callback handle: {} (0x{:x})", callback, callback as u64);
+    
+    let callback_bits = callback.to_bits();
+    let callback_ptr = (callback_bits & POINTER_MASK) as i64;
     
     let result = convert_file(&file_path);
-    eprintln!("Vosk: Conversion result: '{}'", result);
-    if callback != 0 {
-        eprintln!("Vosk: Calling callback with handle: {}", callback);
-        send_to_js(callback, &result);
-        eprintln!("Vosk: Callback called successfully");
-    } else {
-        eprintln!("Vosk: No callback provided");
+    if callback_ptr != 0 {
+        send_to_js(callback_ptr, &result);
     }
 }
 

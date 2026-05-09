@@ -124,7 +124,9 @@ export class AudioRecorder {
     start(): void {
         if (this.isRecording) return;
 
-        const fileName = `voice_${Date.now()}.wav`;
+        const timestamp = Date.now();
+        const safeTimestamp = typeof timestamp === 'number' && !isNaN(timestamp) ? timestamp : Date.now();
+        const fileName = `voice_${safeTimestamp}.wav`;
         audioSetOutputFilename(fileName);
         audioStart();
         audioStartRecording();
@@ -204,7 +206,12 @@ export class AudioRecorder {
 
         this.recordedLevels = [];
 
-        const filePath = this.currentFileName;
+        const isValidFilePath = this.currentFileName && 
+                               typeof this.currentFileName === 'string' && 
+                               this.currentFileName.trim() !== '' && 
+                               this.currentFileName.trim() !== 'NaN';
+        const filePath = isValidFilePath ? this.currentFileName : undefined;
+        
         this.currentFileName = "";
 
         if (this.onConvertCallback) {
