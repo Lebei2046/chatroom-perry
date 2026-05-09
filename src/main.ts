@@ -2,7 +2,8 @@ import {
     App, VStack, HStack, Text, Button, ScrollView, TextField, State,
     VStackWithInsets, widgetAddChild, widgetMatchParentWidth, widgetMatchParentHeight,
     widgetSetBackgroundColor, widgetSetHeight, widgetSetWidth, setPadding, setCornerRadius,
-    widgetSetHidden, widgetSetOnClick, widgetSetOnTouch, stateBindTextfield, onTerminate
+    widgetSetHidden, widgetSetOnClick, widgetSetOnTouch, stateBindTextfield, onTerminate,
+    textfieldSetString
 } from "perry/ui";
 import { createPlayer, play, stop, destroy } from "perry/media";
 import { AudioRecorder } from "./AudioRecorder";
@@ -37,6 +38,7 @@ let textInputContainer: Widget;
 let audioRecorder: any;
 let textField: Widget;
 let speechRecognizer: SpeechRecognizer;
+let messageText: any;
 
 function createMessageBubble(message: Message): Widget {
     const bubble = VStackWithInsets(8, 12, 16, 12, 16);
@@ -114,18 +116,19 @@ async function handleConvertToText(filePath?: string) {
     if (filePath && typeof filePath === "string" && filePath !== "NaN") {
         showToast("Converting voice to text...");
         voskConvertFile(filePath, (text: string) => {
+            console.log("[DEBUG] Vosk callback received text:", text);
+            showToast(`Vosk returned: ${text}`);
+            switchToTextMode();
             currentTextInput = text;
-            const messageText = State(text);
-            stateBindTextfield(messageText, textField);
-            showToast("Voice converted to text");
+            textfieldSetString(textField, text);
+            showToast(`Text set to: ${text}`);
         });
     } else {
         currentTextInput = "Voice converted text";
-        const messageText = State("Voice converted text");
-        stateBindTextfield(messageText, textField);
+        textfieldSetString(textField, "Voice converted text");
         showToast("Voice converted to text (no file)");
+        switchToTextMode();
     }
-    switchToTextMode();
 }
 
 async function main(): Promise<void> {
@@ -136,7 +139,7 @@ async function main(): Promise<void> {
     widgetMatchParentHeight(scrollView);
     widgetAddChild(scrollView, messageContainer);
 
-    const messageText = State("");
+    messageText = State("");
     textField = TextField("", (value) => {
         currentTextInput = value;
         messageText.set(value);
@@ -148,8 +151,7 @@ async function main(): Promise<void> {
     speechRecognizer = new SpeechRecognizer({
         onTextRecognized: (text: string) => {
             currentTextInput = text;
-            const messageText = State(text);
-            stateBindTextfield(messageText, textField);
+            messageText.set(text);
             showToast(`Recognized: ${text}`);
         },
         onStatusChange: (isActive: boolean) => {
@@ -171,6 +173,7 @@ async function main(): Promise<void> {
 
     const plusButton = Button("➕", () => {
         showToast("Plus menu opened");
+        textfieldSetString(textField, "Test from plus button");
     });
     widgetSetWidth(plusButton, 40);
     widgetSetHeight(plusButton, 40);

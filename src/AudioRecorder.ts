@@ -27,7 +27,7 @@ export class AudioRecorder {
 
     private onSendCallback?: (duration: number, filePath?: string) => void;
     private onCancelCallback?: () => void;
-    private onConvertCallback?: () => void;
+    private onConvertCallback?: (filePath?: string) => void;
 
     private recordedLevels: number[] = [];
     private currentFileName: string = "";

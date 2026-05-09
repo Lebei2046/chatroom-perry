@@ -75,14 +75,22 @@ extern "C" {
 }
 
 fn send_to_js(closure: i64, text: &str) {
+    eprintln!("[DEBUG] send_to_js called with closure={}, text={}", closure, text);
     unsafe {
         let c_str = match CString::new(text) {
             Ok(s) => s,
-            Err(_) => return,
+            Err(_) => {
+                eprintln!("[DEBUG] send_to_js: CString::new failed");
+                return;
+            }
         };
         let str_ptr = js_string_from_bytes(c_str.as_ptr() as *const u8, text.len() as i32);
+        eprintln!("[DEBUG] send_to_js: str_ptr={}", str_ptr);
         let js_val = f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        eprintln!("[DEBUG] send_to_js: js_val bits={:x}", js_val.to_bits());
+        eprintln!("[DEBUG] send_to_js: calling js_closure_call1 with closure={}", closure);
         js_closure_call1(closure, js_val);
+        eprintln!("[DEBUG] send_to_js: js_closure_call1 returned");
     }
 }
 
@@ -178,29 +186,27 @@ pub unsafe extern "C" fn voskStop(session_id: i64) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskConvertFile(file_path_ptr: i64, callback: f64) {
-    let ptr = file_path_ptr as usize;
-    
-    if ptr < 0x1000 {
+pub unsafe extern "C" fn voskConvertFile(file_path_ptr: *const StringHeader, callback: f64) {
+    if file_path_ptr.is_null() {
         return;
     }
     
-    let file_path_header = ptr as *const StringHeader;
-    let len = (*file_path_header).byte_len as usize;
+    let len = (*file_path_ptr).byte_len as usize;
     
     if len == 0 || len > 1024 {
         return;
     }
     
-    let data_ptr = (file_path_header as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data_ptr = (file_path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     
     let file_path = String::from_utf8_lossy(bytes).into_owned();
     
+    let result = convert_file(&file_path);
+    
     let callback_bits = callback.to_bits();
     let callback_ptr = (callback_bits & POINTER_MASK) as i64;
     
-    let result = convert_file(&file_path);
     if callback_ptr != 0 {
         send_to_js(callback_ptr, &result);
     }
