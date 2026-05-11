@@ -72,6 +72,7 @@ const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 extern "C" {
     fn js_closure_call1(closure: i64, arg: f64);
     fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
 fn send_to_js(closure: i64, text: &str) {
@@ -131,19 +132,32 @@ pub unsafe extern "C" fn voskStart(callback: f64) -> i64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskProcessSamples(samples_ptr: *const f32, num_samples: usize) {
+pub unsafe extern "C" fn voskProcessSamples(samples_ptr_val: f64, num_samples: f64) {
+    let samples_ptr = {
+        let bits = samples_ptr_val.to_bits();
+        let raw_ptr = (bits & POINTER_MASK) as *const f32;
+        raw_ptr
+    };
+    let num_samples_usize = num_samples as usize;
+    eprintln!("[voskProcessSamples] called with num_samples: {}", num_samples_usize);
+    
     if !VOSK_RUNNING.load(Ordering::Relaxed) {
+        eprintln!("[voskProcessSamples] VOSK_RUNNING is false");
         return;
     }
 
     let Some((rec, callback)) = RECOGNIZER.lock().unwrap().clone() else {
+        eprintln!("[voskProcessSamples] RECOGNIZER is None");
         return;
     };
 
-    let samples = std::slice::from_raw_parts(samples_ptr, num_samples);
+    let samples = std::slice::from_raw_parts(samples_ptr, num_samples_usize);
     if samples.is_empty() {
+        eprintln!("[voskProcessSamples] samples is empty");
         return;
     }
+
+    eprintln!("[voskProcessSamples] Processing {} samples", samples.len());
 
     let downsampled = downsample(samples, 48000, SAMPLE_RATE);
     let pcm_samples = to_pcm_i16(&downsampled);
@@ -155,9 +169,12 @@ pub unsafe extern "C" fn voskProcessSamples(samples_ptr: *const f32, num_samples
     let result = rec_lock.partial_result();
     let trimmed = result.partial.trim();
     
+    eprintln!("[voskProcessSamples] partial result: '{}'", trimmed);
+    
     let mut last_text = LAST_TEXT.lock().unwrap();
     if !trimmed.is_empty() && trimmed != *last_text {
         *last_text = trimmed.to_string();
+        eprintln!("[voskProcessSamples] Sending to JS: '{}'", &last_text);
         send_to_js(callback, &last_text);
     }
 }

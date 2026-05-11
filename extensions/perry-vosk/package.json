@@ -11,7 +11,7 @@
         { "name": "voskStart", "params": ["callback"], "returns": "i64" },
         { "name": "voskStop", "params": ["i64"], "returns": "void" },
         { "name": "voskConvertFile", "params": ["string", "callback"], "returns": "void" },
-        { "name": "voskProcessSamples", "params": ["pointer", "usize"], "returns": "void" }
+        { "name": "voskProcessSamples", "params": ["f64", "f64"], "returns": "void" }
       ],
       "targets": {
         "linux": {

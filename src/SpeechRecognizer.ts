@@ -12,6 +12,7 @@ export class SpeechRecognizer {
     private isActive = false;
     private sessionId = 0;
     private voskAvailable: number | null = null;
+    private sampleCount = 0;
 
     private onTextRecognizedCallback?: (text: string) => void;
     private onStatusChangeCallback?: (isActive: boolean) => void;
@@ -75,8 +76,14 @@ export class SpeechRecognizer {
         console.log("[SpeechRecognizer] voskStart returned sessionId:", this.sessionId);
         
         if (this.sessionId > 0) {
+            console.log("[SpeechRecognizer] Session started, testing audio system");
+            (globalThis as any).audioTest?.();
             console.log("[SpeechRecognizer] Session started, registering audio callback");
             audioRegisterCallback((samplesPtr: any, numSamples: number) => {
+                this.sampleCount += numSamples;
+                if (this.sampleCount % (48000 * 2) === 0) {
+                    console.log("[SpeechRecognizer] Audio callback called, total samples:", this.sampleCount);
+                }
                 voskProcessSamples(samplesPtr, numSamples);
             });
             console.log("[SpeechRecognizer] Starting audio");
