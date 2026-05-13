@@ -1,3 +1,26 @@
+```markdown
+---
+
+Let me explain how Perry processes this pipeline:
+
+chatroom → perry-vosk package → perry-vosk crate → vosk crate → libvosk
+
+1. chatroom : TypeScript application using Perry framework
+2. perry-vosk package : Contains package.json with FFI function definitions and index.ts
+3. perry-vosk crate : Rust crate implementing native FFI functions
+4. vosk crate : Rust wrapper around libvosk
+5. libvosk : Native C library for speech recognition
+When running:
+
+1. Perry compiles TypeScript to native code
+2. Compiles the Rust crate to a static library
+3. Links the static library into the chatroom binary
+4. TypeScript function calls resolve to native functions via FFI
+5. Rust functions call the vosk crate, which calls libvosk
+
+---
+```
+
 Let me check the Perry plugin documentation to see if it's feasible to implement the audio functionality as a plugin instead of patching the core:
 
 Perfect! Now I have the complete picture. Let me analyze and give you a recommendation:
@@ -7,17 +30,18 @@ Perfect! Now I have the complete picture. Let me analyze and give you a recommen
 First, I see that **Audio Capture** and **Media Playback** are already **built-in system APIs** in Perry:
 
 ### Existing APIs
+
 1. **Audio Capture** (`perry/system`) - already has:
    - `audioStart()` / `audioStop()`
    - `audioGetLevel()` / `audioGetPeak()` / `audioGetWaveform()`
    - Full cross-platform support (Linux uses PulseAudio)
-
 2. **Media Playback** (`perry/media`) - already has:
    - `createPlayer()` / `play()` / `pause()` / `stop()`
    - `file://` URL support
    - Full cross-platform support (Linux uses GStreamer + MPRIS)
 
 ### What We Added
+
 - `audioSetOutputFilename()` and `audioStopRecording()` for WAV file recording
 - Extended the audio capture to save samples to disk
 
@@ -25,12 +49,14 @@ First, I see that **Audio Capture** and **Media Playback** are already **built-i
 
 **Option 1: Contribute to Perry Core (Recommended)**
 Since WAV recording is a natural extension of the existing audio capture API, the cleanest approach would be to:
+
 1. Create a PR to the Perry repository with our changes
 2. This makes the functionality available to all Perry users
 3. Maintains a consistent API surface
 
 **Option 2: Native Extension**
 If you prefer not to patch Perry core, you could create a native extension:
+
 1. Package the audio recording functionality as a native extension
 2. Use `--bundle-extensions` when compiling your app
 3. No core patching needed
@@ -54,6 +80,7 @@ pub fn stop_recording() {}
 The Perry team was **already planning to add WAV recording functionality**! Here's my analysis:
 
 ### ✅ **Audio APIs are already built-in**
+
 - **Audio Capture** (`perry/system`) - already exists with level metering
 - **Media Playback** (`perry/media`) - already exists with file playback
 - **Recording stubs** - already exist in all platform implementations!
@@ -77,6 +104,7 @@ If you *really* want to use a plugin:
 ### 📋 **What we've accomplished**
 
 You now have:
+
 - ✅ Working WAV recording for Linux (GTK4)
 - ✅ Audio playback via `perry/media`
 - ✅ Clean output (debug logs removed)

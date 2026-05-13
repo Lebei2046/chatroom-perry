@@ -1,30 +1,40 @@
 use std::env;
-use std::fs;
 use std::path::Path;
 
 fn main() {
-    println!("cargo:rustc-link-search=native=/usr/local/lib");
-    println!("cargo:rustc-link-lib=dylib=vosk");
-
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let target_dir = Path::new(&out_dir).parent().unwrap().parent().unwrap().parent().unwrap();
-
-    let target_triple = env::var("TARGET").unwrap();
-    let triple_release_dir = target_dir.join(&target_triple).join("release");
-    let src_lib = triple_release_dir.join("libperry_vosk.a");
-
-    let release_dir = target_dir.join("release");
-    let dest_lib = release_dir.join("libperry_vosk.a");
-
-    if src_lib.exists() {
-        let _ = fs::create_dir_all(&release_dir);
-        match fs::copy(&src_lib, &dest_lib) {
-            Ok(_) => {
-                println!("cargo:warning=Copied libperry_vosk.a from {} to target/release", target_triple);
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to copy libperry_vosk.a: {}", e);
+    println!("cargo:rerun-if-env-changed=VOSK_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=LD_LIBRARY_PATH");
+    
+    let lib_dirs = vec![
+        "/usr/local/lib",
+        "/usr/lib",
+        "/usr/lib/x86_64-linux-gnu",
+        "/opt/vosk/lib",
+    ];
+    
+    let mut found = false;
+    
+    if let Ok(vosk_lib_dir) = env::var("VOSK_LIB_DIR") {
+        if Path::new(&vosk_lib_dir).exists() {
+            println!("cargo:rustc-link-search=native={}", vosk_lib_dir);
+            found = true;
+        }
+    }
+    
+    if !found {
+        for dir in lib_dirs {
+            let lib_path = Path::new(dir).join("libvosk.so");
+            if lib_path.exists() {
+                println!("cargo:rustc-link-search=native={}", dir);
+                found = true;
+                break;
             }
         }
     }
+    
+    if !found {
+        println!("cargo:warning=libvosk.so not found in standard locations. Consider setting VOSK_LIB_DIR environment variable.");
+    }
+    
+    println!("cargo:rustc-link-lib=vosk");
 }

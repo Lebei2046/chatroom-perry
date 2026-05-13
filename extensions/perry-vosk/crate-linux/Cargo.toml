@@ -3,10 +3,9 @@ name = "perry-vosk"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-build = "build.rs"
 
 [lib]
-crate-type = ["staticlib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]

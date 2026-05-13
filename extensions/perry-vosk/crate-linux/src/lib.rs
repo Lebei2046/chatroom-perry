@@ -21,13 +21,13 @@ static VOSK_MODEL: Lazy<Option<vosk::Model>> = Lazy::new(|| {
     let model_path = std::path::PathBuf::from(home).join(".perry").join("model");
     eprintln!("Vosk: Model path: {:?}", model_path);
     eprintln!("Vosk: Model exists? {}", model_path.exists());
-    
+
     if !model_path.exists() {
         eprintln!("Vosk: Model not found at {:?}", model_path);
         eprintln!("Vosk: Install with: bash scripts/install-vosk-model.sh");
         return None;
     }
-    
+
     let model_path_str = model_path.to_string_lossy().to_string();
     eprintln!("Vosk: Loading model from: {}", model_path_str);
     match vosk::Model::new(model_path_str) {
@@ -51,7 +51,7 @@ fn downsample(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
     let ratio = source_rate as f64 / target_rate as f64;
     let target_len = (samples.len() as f64 / ratio) as usize;
     let mut result = Vec::with_capacity(target_len);
-    
+
     for i in 0..target_len {
         let src_idx = (i as f64 * ratio) as usize;
         result.push(samples[src_idx.min(samples.len() - 1)]);
@@ -96,19 +96,17 @@ fn send_to_js(closure: i64, text: &str) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskIsAvailable() -> f64 {
-    if VOSK_MODEL.is_some() {
-        1.0
-    } else {
-        0.0
-    }
+pub unsafe extern "C" fn vosk_is_available() -> f64 {
+    let is_available = VOSK_MODEL.is_some();
+    eprintln!("[vosk_is_available] CALLED!!! VOSK_MODEL.is_some(): {}", is_available);
+    if is_available { 1.0 } else { 0.0 }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskStart(callback: f64) -> i64 {
+pub unsafe extern "C" fn vosk_start(callback: f64) -> i64 {
     let callback_bits = callback.to_bits();
     let callback_ptr = (callback_bits & POINTER_MASK) as i64;
-    
+
     if VOSK_RUNNING.load(Ordering::Relaxed) {
         return SESSION_ID.load(Ordering::Relaxed) as i64;
     }
@@ -132,7 +130,7 @@ pub unsafe extern "C" fn voskStart(callback: f64) -> i64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskProcessSamples(samples_ptr_val: f64, num_samples: f64) {
+pub unsafe extern "C" fn vosk_process_samples(samples_ptr_val: f64, num_samples: f64) {
     let samples_ptr = {
         let bits = samples_ptr_val.to_bits();
         let raw_ptr = (bits & POINTER_MASK) as *const f32;
@@ -140,7 +138,7 @@ pub unsafe extern "C" fn voskProcessSamples(samples_ptr_val: f64, num_samples: f
     };
     let num_samples_usize = num_samples as usize;
     eprintln!("[voskProcessSamples] called with num_samples: {}", num_samples_usize);
-    
+
     if !VOSK_RUNNING.load(Ordering::Relaxed) {
         eprintln!("[voskProcessSamples] VOSK_RUNNING is false");
         return;
@@ -168,9 +166,9 @@ pub unsafe extern "C" fn voskProcessSamples(samples_ptr_val: f64, num_samples: f
     static LAST_TEXT: Mutex<String> = Mutex::new(String::new());
     let result = rec_lock.partial_result();
     let trimmed = result.partial.trim();
-    
+
     eprintln!("[voskProcessSamples] partial result: '{}'", trimmed);
-    
+
     let mut last_text = LAST_TEXT.lock().unwrap();
     if !trimmed.is_empty() && trimmed != *last_text {
         *last_text = trimmed.to_string();
@@ -180,13 +178,13 @@ pub unsafe extern "C" fn voskProcessSamples(samples_ptr_val: f64, num_samples: f
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskStop(session_id: i64) {
+pub unsafe extern "C" fn vosk_stop(_session_id: i64) {
     if !VOSK_RUNNING.load(Ordering::Relaxed) {
         return;
     }
 
     VOSK_RUNNING.store(false, Ordering::Relaxed);
-    
+
     if let Some((rec, callback)) = RECOGNIZER.lock().unwrap().take() {
         let mut rec_lock = rec.lock().unwrap();
         let final_result = rec_lock.final_result();
@@ -203,27 +201,27 @@ pub unsafe extern "C" fn voskStop(session_id: i64) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn voskConvertFile(file_path_ptr: *const StringHeader, callback: f64) {
+pub unsafe extern "C" fn vosk_convert_file(file_path_ptr: *const StringHeader, callback: f64) {
     if file_path_ptr.is_null() {
         return;
     }
-    
+
     let len = (*file_path_ptr).byte_len as usize;
-    
+
     if len == 0 || len > 1024 {
         return;
     }
-    
+
     let data_ptr = (file_path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
-    
+
     let file_path = String::from_utf8_lossy(bytes).into_owned();
-    
+
     let result = convert_file(&file_path);
-    
+
     let callback_bits = callback.to_bits();
     let callback_ptr = (callback_bits & POINTER_MASK) as i64;
-    
+
     if callback_ptr != 0 {
         send_to_js(callback_ptr, &result);
     }
@@ -265,7 +263,7 @@ pub fn convert_file(file_path: &str) -> String {
 
     let pcm_samples = to_pcm_i16(&downsampled);
     let _ = rec.accept_waveform(&pcm_samples);
-    
+
     let result = rec.final_result();
     match result {
         vosk::CompleteResult::Single(res) => {
