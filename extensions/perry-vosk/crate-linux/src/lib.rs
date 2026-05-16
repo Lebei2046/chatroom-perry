@@ -1,9 +1,22 @@
 use once_cell::sync::Lazy;
-use perry_ffi::StringHeader;
-use std::ffi::CString;
+use perry_ffi::{JsString, read_string};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, Duration};
 
+struct PendingRecognition {
+    callback: i64,
+    text: String,
+}
+
+unsafe impl Send for PendingRecognition {}
+
+static PENDING_RECOGNITIONS: Mutex<Vec<PendingRecognition>> = Mutex::new(Vec::new());
+
+extern "C" {
+    fn js_notify_main_thread();
+    fn js_register_ext_pump(f: extern "C" fn() -> i32);
+}
 
 static VOSK_RUNNING: AtomicBool = AtomicBool::new(false);
 static SESSION_ID: AtomicU64 = AtomicU64::new(0);
@@ -11,34 +24,27 @@ static COUNTER: AtomicU64 = AtomicU64::new(1);
 
 const SAMPLE_RATE: u32 = 16000;
 
+const SILENCE_THRESHOLD: f32 = 0.01;
+const SILENCE_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
+static LAST_SPEECH_TIME: Mutex<Option<Instant>> = Mutex::new(None);
+static IS_SPEAKING: AtomicBool = AtomicBool::new(false);
+
 static VOSK_MODEL: Lazy<Option<vosk::Model>> = Lazy::new(|| {
-    eprintln!("Vosk: Initializing model...");
     let home = match std::env::var("HOME") {
         Ok(h) => h,
         Err(_) => ".".to_string(),
     };
-    eprintln!("Vosk: HOME env var: {}", home);
     let model_path = std::path::PathBuf::from(home).join(".perry").join("model");
-    eprintln!("Vosk: Model path: {:?}", model_path);
-    eprintln!("Vosk: Model exists? {}", model_path.exists());
 
     if !model_path.exists() {
-        eprintln!("Vosk: Model not found at {:?}", model_path);
-        eprintln!("Vosk: Install with: bash scripts/install-vosk-model.sh");
+        eprintln!("Vosk: Model not found at {:?}. Install with: bash scripts/install-vosk-model.sh", model_path);
         return None;
     }
 
     let model_path_str = model_path.to_string_lossy().to_string();
-    eprintln!("Vosk: Loading model from: {}", model_path_str);
     match vosk::Model::new(model_path_str) {
-        Some(m) => {
-            eprintln!("Vosk: Loaded model from {}", model_path.display());
-            Some(m)
-        }
-        None => {
-            eprintln!("Vosk: Failed to load model");
-            None
-        }
+        Some(m) => Some(m),
+        None => None,
     }
 });
 
@@ -66,46 +72,36 @@ fn to_pcm_i16(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
-const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
-const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-
 extern "C" {
     fn js_closure_call1(closure: i64, arg: f64);
-    fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
+    fn js_nanbox_string(ptr: i64) -> f64;
 }
 
 fn send_to_js(closure: i64, text: &str) {
-    eprintln!("[DEBUG] send_to_js called with closure={}, text={}", closure, text);
+    {
+        let mut pending = PENDING_RECOGNITIONS.lock().unwrap();
+        pending.push(PendingRecognition {
+            callback: closure,
+            text: text.to_string(),
+        });
+    }
+    
     unsafe {
-        let c_str = match CString::new(text) {
-            Ok(s) => s,
-            Err(_) => {
-                eprintln!("[DEBUG] send_to_js: CString::new failed");
-                return;
-            }
-        };
-        let str_ptr = js_string_from_bytes(c_str.as_ptr() as *const u8, text.len() as i32);
-        eprintln!("[DEBUG] send_to_js: str_ptr={}", str_ptr);
-        let js_val = f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
-        eprintln!("[DEBUG] send_to_js: js_val bits={:x}", js_val.to_bits());
-        eprintln!("[DEBUG] send_to_js: calling js_closure_call1 with closure={}", closure);
-        js_closure_call1(closure, js_val);
-        eprintln!("[DEBUG] send_to_js: js_closure_call1 returned");
+        js_notify_main_thread();
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn vosk_is_available() -> f64 {
-    let is_available = VOSK_MODEL.is_some();
-    eprintln!("[vosk_is_available] CALLED!!! VOSK_MODEL.is_some(): {}", is_available);
-    if is_available { 1.0 } else { 0.0 }
+    if VOSK_MODEL.is_some() { 1.0 } else { 0.0 }
 }
+
+static PUMP_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
 pub unsafe extern "C" fn vosk_start(callback: f64) -> i64 {
-    let callback_bits = callback.to_bits();
-    let callback_ptr = (callback_bits & POINTER_MASK) as i64;
+    let callback_ptr = js_nanbox_get_pointer(callback);
 
     if VOSK_RUNNING.load(Ordering::Relaxed) {
         return SESSION_ID.load(Ordering::Relaxed) as i64;
@@ -126,36 +122,44 @@ pub unsafe extern "C" fn vosk_start(callback: f64) -> i64 {
     let rec_arc = Arc::new(Mutex::new(rec));
     *RECOGNIZER.lock().unwrap() = Some((rec_arc, callback_ptr));
 
+    if !PUMP_REGISTERED.load(Ordering::Relaxed) {
+        js_register_ext_pump(vosk_process_pending);
+        PUMP_REGISTERED.store(true, Ordering::Relaxed);
+    }
+
     session_id as i64
 }
 
+fn detect_speech(samples: &[f32]) -> bool {
+    let mut sum_sq = 0.0f64;
+    for &sample in samples {
+        sum_sq += (sample as f64) * (sample as f64);
+    }
+    let rms = (sum_sq / samples.len() as f64).sqrt() as f32;
+    rms > SILENCE_THRESHOLD
+}
+
+static LAST_UPDATE_TIME: AtomicU64 = AtomicU64::new(0);
+const UPDATE_INTERVAL_MS: u64 = 50;
+static LAST_TEXT: Mutex<String> = Mutex::new(String::new());
+
 #[no_mangle]
 pub unsafe extern "C" fn vosk_process_samples(samples_ptr_val: f64, num_samples: f64) {
-    let samples_ptr = {
-        let bits = samples_ptr_val.to_bits();
-        let raw_ptr = (bits & POINTER_MASK) as *const f32;
-        raw_ptr
-    };
+    let samples_ptr = js_nanbox_get_pointer(samples_ptr_val) as *const f32;
     let num_samples_usize = num_samples as usize;
-    eprintln!("[voskProcessSamples] called with num_samples: {}", num_samples_usize);
 
     if !VOSK_RUNNING.load(Ordering::Relaxed) {
-        eprintln!("[voskProcessSamples] VOSK_RUNNING is false");
         return;
     }
 
     let Some((rec, callback)) = RECOGNIZER.lock().unwrap().clone() else {
-        eprintln!("[voskProcessSamples] RECOGNIZER is None");
         return;
     };
 
     let samples = std::slice::from_raw_parts(samples_ptr, num_samples_usize);
     if samples.is_empty() {
-        eprintln!("[voskProcessSamples] samples is empty");
         return;
     }
-
-    eprintln!("[voskProcessSamples] Processing {} samples", samples.len());
 
     let downsampled = downsample(samples, 48000, SAMPLE_RATE);
     let pcm_samples = to_pcm_i16(&downsampled);
@@ -163,18 +167,40 @@ pub unsafe extern "C" fn vosk_process_samples(samples_ptr_val: f64, num_samples:
     let mut rec_lock = rec.lock().unwrap();
     let _ = rec_lock.accept_waveform(&pcm_samples);
 
-    static LAST_TEXT: Mutex<String> = Mutex::new(String::new());
     let result = rec_lock.partial_result();
     let trimmed = result.partial.trim();
 
-    eprintln!("[voskProcessSamples] partial result: '{}'", trimmed);
-
-    let mut last_text = LAST_TEXT.lock().unwrap();
-    if !trimmed.is_empty() && trimmed != *last_text {
+    if !trimmed.is_empty() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let last = LAST_UPDATE_TIME.load(Ordering::Relaxed);
+        let mut last_text = LAST_TEXT.lock().unwrap();
+        
+        let text_changed = *last_text != trimmed;
         *last_text = trimmed.to_string();
-        eprintln!("[voskProcessSamples] Sending to JS: '{}'", &last_text);
-        send_to_js(callback, &last_text);
+        
+        if text_changed || now - last >= UPDATE_INTERVAL_MS {
+            LAST_UPDATE_TIME.store(now, Ordering::Relaxed);
+            send_to_js(callback, trimmed);
+        }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn vosk_process_pending() -> i32 {
+    let mut pending = PENDING_RECOGNITIONS.lock().unwrap();
+    
+    for item in pending.drain(..) {
+        unsafe {
+            let str_handle = perry_ffi::alloc_string(&item.text);
+            let js_val = js_nanbox_string(str_handle.as_raw() as i64);
+            js_closure_call1(item.callback, js_val);
+        }
+    }
+    
+    pending.len() as i32
 }
 
 #[no_mangle]
@@ -201,26 +227,17 @@ pub unsafe extern "C" fn vosk_stop(_session_id: i64) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn vosk_convert_file(file_path_ptr: *const StringHeader, callback: f64) {
-    if file_path_ptr.is_null() {
+pub unsafe extern "C" fn vosk_convert_file(file_path_ptr: i64, callback: f64) {
+    let file_path_handle = JsString::from_raw(file_path_ptr as *mut _);
+    let file_path = read_string(file_path_handle).unwrap_or("");
+
+    if file_path.is_empty() || file_path.len() > 1024 {
         return;
     }
 
-    let len = (*file_path_ptr).byte_len as usize;
+    let result = convert_file(file_path);
 
-    if len == 0 || len > 1024 {
-        return;
-    }
-
-    let data_ptr = (file_path_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-
-    let file_path = String::from_utf8_lossy(bytes).into_owned();
-
-    let result = convert_file(&file_path);
-
-    let callback_bits = callback.to_bits();
-    let callback_ptr = (callback_bits & POINTER_MASK) as i64;
+    let callback_ptr = js_nanbox_get_pointer(callback);
 
     if callback_ptr != 0 {
         send_to_js(callback_ptr, &result);

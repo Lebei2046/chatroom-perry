@@ -1,6 +1,6 @@
 import { Button, widgetSetWidth, widgetSetHeight, setCornerRadius, widgetSetBackgroundColor, widgetSetOnClick } from "perry/ui";
 import { audioStart, audioStop, audioRegisterCallback, audioUnregisterCallback } from "perry/system";
-import { voskIsAvailable, voskStart, voskStop, voskProcessSamples } from "perry-vosk";
+import { voskIsAvailable, voskStart, voskStop, voskProcessSamples, voskProcessPending } from "perry-vosk";
 
 interface SpeechRecognizerOptions {
     onTextRecognized?: (text: string) => void;
@@ -13,15 +13,16 @@ export class SpeechRecognizer {
     private sessionId = 0;
     private voskAvailable: number | null = null;
     private sampleCount = 0;
-
-    private onTextRecognizedCallback?: (text: string) => void;
-    private onStatusChangeCallback?: (isActive: boolean) => void;
+    private pendingTimer: number | null = null;
 
     constructor(options?: SpeechRecognizerOptions) {
         this.onTextRecognizedCallback = options?.onTextRecognized;
         this.onStatusChangeCallback = options?.onStatusChange;
         this.button = this.buildButton();
     }
+
+    private onTextRecognizedCallback?: (text: string) => void;
+    private onStatusChangeCallback?: (isActive: boolean) => void;
 
     private checkAvailability(): number {
         if (this.voskAvailable !== null) {
@@ -76,16 +77,26 @@ export class SpeechRecognizer {
         console.log("[SpeechRecognizer] voskStart returned sessionId:", this.sessionId);
         
         if (this.sessionId > 0) {
-            console.log("[SpeechRecognizer] Session started, testing audio system");
-            (globalThis as any).audioTest?.();
             console.log("[SpeechRecognizer] Session started, registering audio callback");
-            audioRegisterCallback((samplesPtr: any, numSamples: number) => {
-                this.sampleCount += numSamples;
-                if (this.sampleCount % (48000 * 2) === 0) {
-                    console.log("[SpeechRecognizer] Audio callback called, total samples:", this.sampleCount);
-                }
-                voskProcessSamples(samplesPtr, numSamples);
-            });
+            try {
+                audioRegisterCallback((samplesPtr: any, numSamples: number) => {
+                    this.sampleCount += numSamples;
+                    if (this.sampleCount % (48000 * 2) === 0) {
+                        console.log("[SpeechRecognizer] Audio callback called, total samples:", this.sampleCount);
+                    }
+                    voskProcessSamples(samplesPtr, numSamples);
+                });
+                console.log("[SpeechRecognizer] Audio callback registered successfully");
+            } catch (e) {
+                console.log("[SpeechRecognizer] ERROR registering audio callback:", e);
+            }
+            
+            console.log("[SpeechRecognizer] Starting pending timer");
+            this.pendingTimer = setInterval(() => {
+                const count = voskProcessPending();
+                console.log("[SpeechRecognizer] voskProcessPending returned:", count);
+            }, 50);
+            
             console.log("[SpeechRecognizer] Starting audio");
             audioStart();
             console.log("[SpeechRecognizer] Returning true");
@@ -101,6 +112,13 @@ export class SpeechRecognizer {
         audioUnregisterCallback();
         voskStop(this.sessionId);
         this.sessionId = 0;
+        
+        if (this.pendingTimer !== null) {
+            clearInterval(this.pendingTimer);
+            this.pendingTimer = null;
+            console.log("[SpeechRecognizer] Pending timer cleared");
+        }
+        
         console.log("[SpeechRecognizer] stopSpeechRecognition completed");
     }
 

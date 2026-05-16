@@ -3,6 +3,7 @@ declare function vosk_start(onResult: (text: string) => void): number;
 declare function vosk_stop(sessionId: number): void;
 declare function vosk_convert_file(filePath: string, onResult: (text: string) => void): void;
 declare function vosk_process_samples(samplesPtr: any, numSamples: number): void;
+declare function vosk_process_pending(): number;
 
 export function voskIsAvailable(): number {
     return vosk_is_available();
@@ -22,4 +23,8 @@ export function voskConvertFile(filePath: string, onResult: (text: string) => vo
 
 export function voskProcessSamples(samplesPtr: any, numSamples: number): void {
     vosk_process_samples(samplesPtr, numSamples);
+}
+
+export function voskProcessPending(): number {
+    return vosk_process_pending();
 }

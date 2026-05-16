@@ -152,6 +152,7 @@ async function main(): Promise<void> {
         onTextRecognized: (text: string) => {
             currentTextInput = text;
             messageText.set(text);
+            textfieldSetString(textField, text);
             showToast(`Recognized: ${text}`);
         },
         onStatusChange: (isActive: boolean) => {

@@ -17,6 +17,7 @@
         "linux": {
           "crate": "crate-linux",
           "lib": "libperry_vosk.a",
+          "libDirs": ["/usr/local/lib"],
           "libs": ["vosk"]
         },
         "macos": {
