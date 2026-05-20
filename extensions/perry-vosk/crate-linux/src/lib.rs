@@ -1,8 +1,26 @@
 use once_cell::sync::Lazy;
-use perry_ffi::{JsString, read_string};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
+
+#[repr(C)]
+struct StringHeader {
+    utf16_len: u32,
+    byte_len: u32,
+    capacity: u32,
+    refcount: u32,
+    flags: u32,
+}
+
+unsafe fn read_string(ptr: *mut StringHeader) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let header = &*ptr;
+    let data_ptr = (ptr as *mut u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, header.byte_len as usize);
+    std::str::from_utf8(bytes).ok().map(String::from)
+}
 
 struct PendingRecognition {
     callback: i64,
@@ -76,6 +94,7 @@ extern "C" {
     fn js_closure_call1(closure: i64, arg: f64);
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
+    fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
 }
 
 fn send_to_js(closure: i64, text: &str) {
@@ -194,8 +213,8 @@ pub extern "C" fn vosk_process_pending() -> i32 {
     
     for item in pending.drain(..) {
         unsafe {
-            let str_handle = perry_ffi::alloc_string(&item.text);
-            let js_val = js_nanbox_string(str_handle.as_raw() as i64);
+            let str_ptr = js_string_from_bytes(item.text.as_ptr(), item.text.len() as u32);
+            let js_val = js_nanbox_string(str_ptr as i64);
             js_closure_call1(item.callback, js_val);
         }
     }
@@ -228,14 +247,13 @@ pub unsafe extern "C" fn vosk_stop(_session_id: i64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn vosk_convert_file(file_path_ptr: i64, callback: f64) {
-    let file_path_handle = JsString::from_raw(file_path_ptr as *mut _);
-    let file_path = read_string(file_path_handle).unwrap_or("");
+    let file_path = read_string(file_path_ptr as *mut StringHeader).unwrap_or_default();
 
     if file_path.is_empty() || file_path.len() > 1024 {
         return;
     }
 
-    let result = convert_file(file_path);
+    let result = convert_file(&file_path);
 
     let callback_ptr = js_nanbox_get_pointer(callback);
 
